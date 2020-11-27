@@ -4,7 +4,7 @@
 
 import pandas as pd
 import numpy as np
-
+from sklearn.preprocessing import StandardScaler
 
 class preprocess_data():
 
@@ -40,24 +40,37 @@ class preprocess_data():
         df = self.data_original
         feat_list = self.feat_list
 
+        bin_list           = self.binary_f# ['drug', 'sex', 'ascites', 'hepatomegaly', 'spiders']
+        cont_list          = self.continuous_f #['age', 'edema', 'serBilir', 'serChol', 'albumin', 'alkaline', 'SGOT', 'platelets', 'prothrombin', 'histologic']
+        
+        df                 = df[['id', 'time', 'label']+feat_list]
+
+        if not cont_list:
+            cont_list = feat_list
+        # normalize data
+        scaler = StandardScaler()
+
+        df[cont_list] = scaler.fit_transform(
+            np.asarray(df[cont_list]).astype(float)
+            )
+
         grouped  = df.groupby(['id'])
         id_list  = pd.unique(df['id'])
         max_measurment = np.max(grouped.count())[0]
 
         data     = np.zeros([len(id_list), max_measurment, len(feat_list)+1])
-        pat_info = np.zeros([len(id_list), 5])
+        pat_info = np.zeros([len(id_list), 4])
 
         for i, tmp_id in enumerate(id_list):
             tmp = grouped.get_group(tmp_id).reset_index(drop=True)
 
-            pat_info[i,4] = tmp.shape[0]            # number of measurements
-            pat_info[i,3] = np.max(tmp['time'])     # last measurement time
-            pat_info[i,2] = tmp['label'][0]         # cause
+            pat_info[i,3] = tmp.shape[0]            # number of measurements
+            pat_info[i,2] = np.max(tmp['label'])         # cause
             pat_info[i,1] = np.max(tmp['time'])     # time to event
             pat_info[i,0] = tmp['id'][0]      
 
-            data[i, :int(pat_info[i, 4]), 1:]  = tmp[feat_list]
-            data[i, :int(pat_info[i, 4]-1), 0] = np.diff(tmp['time'])
+            data[i, :int(pat_info[i, 3]), 1:]  = tmp[feat_list]
+            data[i, :int(pat_info[i, 3]-1), 0] = np.diff(tmp['time'])
             # return the interval of diff measurement times
             
             self.data = data
@@ -68,31 +81,17 @@ class preprocess_data():
 
     def preprocess(self, 
     norm_mode = 'standard'):
-
-        df_                = self.data_original
-
-        bin_list           = self.binary_f# ['drug', 'sex', 'ascites', 'hepatomegaly', 'spiders']
-        cont_list          = self.continuous_f #['age', 'edema', 'serBilir', 'serChol', 'albumin', 'alkaline', 'SGOT', 'platelets', 'prothrombin', 'histologic']
         
-        if len(bin_list) + len(cont_list):
-            feat_list = self.feat_list
-        else:    
-            feat_list      = cont_list + bin_list
-        df_                = df_[['id', 'time', 'label']+feat_list]
-        df_org_            = df_.copy(deep=True)
-
-        #df_[cont_list]     = f_get_Normalization(np.asarray(df_[cont_list]).astype(float), norm_mode)
-
         pat_info, data     = self.construct_dataset()
 
         data_mi                  = np.zeros(np.shape(data))
         data_mi[np.isnan(data)]  = 1
         data[np.isnan(data)]     = 0 
 
-        x_dim           = np.shape(data)[2] 
+        #x_dim           = np.shape(data)[2] 
         # 1 + x_dim_cont + x_dim_bin (including delta)
-        x_dim_cont      = len(cont_list)
-        x_dim_bin       = len(bin_list) 
+        #x_dim_cont      = len(cont_list)
+        #x_dim_bin       = len(bin_list) 
 
         last_measurement= self.pat_info[:,[3]]  #pat_info[:, 3] contains age/month at the last measurement
         label           = self.pat_info[:,[2]]  #status 0,1,2,....
@@ -105,17 +104,18 @@ class preprocess_data():
         if num_Event == 1:
             label[np.where(label!=0)] = 1 #make single risk
 
-        mask1           = self.get_mask1(last_measurement, num_Event, num_Category)
+        mask1_rnn       = self.get_mask_rnn(data, pat_info)
         mask2           = self.get_mask2(time, label, num_Event, num_Category)
         mask3           = self.get_mask3(time, -1, num_Category)
 
-        Dimension       = (x_dim, x_dim_cont, x_dim_bin)
+        #Dimension       = (x_dim, x_dim_cont, x_dim_bin)
         DATA            = (data, time, label)
         MASK            = (mask1, mask2, mask3)
 
-        return Dimension, DATA, MASK, data_mi, pat_info
 
-    def get_mask1(self, meas_time, num_Event, num_Category):
+        return DATA, MASK, data_mi, pat_info, #Dimension
+
+    def get_mask_rnn(self, data, pat_info):
         
         '''
         mask1 is required to get the contional probability (to calculate the denominator part)
@@ -123,12 +123,20 @@ class preprocess_data():
         formula:
 
         '''
+        
+        mask_1 = np.zeros(data.shape[:2])   # comput multiply until last time point
+        for i in range(len(pat_info[:,3])):
+            mask_1[i, :int(pat_info[i,3])]      = 1
 
-        mask = np.zeros([np.shape(meas_time)[0], num_Event, num_Category]) # for denominator
-        for i in range(np.shape(meas_time)[0]):
-            mask[i, :, :int(meas_time[i, 0]+1)] = 1 # last measurement time
+        mask_2 = np.zeros(data.shape[:2])   # mask at the last time point
+        for i in range(len(pat_info[:,3])):
+            mask_2[i, int(pat_info[i,3]-1)]     = 1
 
-        return mask
+        mask_3 = np.zeros(data.shape[:2])   # mask at the last time point
+        for i in range(len(pat_info[:,3])):
+            mask_3[i, :(int(pat_info[i,3]-1))]  = 1
+
+        return (mask_1, mask_2, mask_3)
 
     def get_mask2(self, time, label, num_Event, num_Category):
         '''
