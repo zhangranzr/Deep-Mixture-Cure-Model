@@ -32,7 +32,7 @@ class preprocess_data():
             label: censoring information
                 - 0: censoring
                 - 1: event type 1
-                - 2: event type 2
+            payoff_label: censoring case, y = 0
         output:
             data: array format of dimension (n_individuals, timestamps, n_features)
             pat_info: data specific measuring information
@@ -43,7 +43,7 @@ class preprocess_data():
         bin_list           = self.binary_f# ['drug', 'sex', 'ascites', 'hepatomegaly', 'spiders']
         cont_list          = self.continuous_f #['age', 'edema', 'serBilir', 'serChol', 'albumin', 'alkaline', 'SGOT', 'platelets', 'prothrombin', 'histologic']
         
-        df                 = df[['id', 'time', 'label']+feat_list]
+        df                 = df[['id', 'time', 'label', 'payoff_label']+feat_list]
 
         if not cont_list:
             cont_list = feat_list
@@ -59,11 +59,12 @@ class preprocess_data():
         max_measurment = np.max(grouped.count())[0]
 
         data     = np.zeros([len(id_list), max_measurment, len(feat_list)+1])
-        pat_info = np.zeros([len(id_list), 4])
+        pat_info = np.zeros([len(id_list), 5])
 
         for i, tmp_id in enumerate(id_list):
             tmp = grouped.get_group(tmp_id).reset_index(drop=True)
 
+            pat_info[i,4] = np.max(tmp['payoff_label']) 
             pat_info[i,3] = tmp.shape[0]            # number of measurements
             pat_info[i,2] = np.max(tmp['label'])         # cause
             pat_info[i,1] = np.max(tmp['time'])     # time to event
@@ -93,6 +94,8 @@ class preprocess_data():
         #x_dim_cont      = len(cont_list)
         #x_dim_bin       = len(bin_list) 
 
+        
+        payoff_label    = self.pat_info[:,[4]]
         last_measurement= self.pat_info[:,[3]]  #pat_info[:, 3] contains age/month at the last measurement
         label           = self.pat_info[:,[2]]  #status 0,1,2,....
         time            = self.pat_info[:,[1]]  #time when event occurred or censoring time
@@ -109,8 +112,8 @@ class preprocess_data():
         mask3           = self.get_mask3(time, -1, num_Category)
 
         #Dimension       = (x_dim, x_dim_cont, x_dim_bin)
-        DATA            = (data, time, label)
-        MASK            = (mask1, mask2, mask3)
+        DATA            = (data, time, label, payoff_label)
+        MASK            = (mask1_rnn, mask2, mask3)
 
 
         return DATA, MASK, data_mi, pat_info, #Dimension
@@ -123,7 +126,6 @@ class preprocess_data():
         formula:
 
         '''
-        
         mask_1 = np.zeros(data.shape[:2])   # comput multiply until last time point
         for i in range(len(pat_info[:,3])):
             mask_1[i, :int(pat_info[i,3])]      = 1
