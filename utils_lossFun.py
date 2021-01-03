@@ -7,10 +7,10 @@ from lifelines.utils import concordance_index
 
 class get_loss():
     def __init__(self, batch_index, pat_info, MASK, OUT_pi, OUT_hi, censoring_status,
-    payoff_status, RNN_net, alpha = 0.5, _EPSILON = 1e-08, punish_z = True,
-    sigma1 = 0.1):
+    payoff_status, RNN_net, sigma1, alpha = 0.5, _EPSILON = 1e-08, punish_z = True,
+    ):
         self.batch_index = batch_index
-        self.pat_info     = pat_info
+        self.pat_info    = pat_info
         self.mask = MASK
         self.OUT_h_i = OUT_hi  # conditional prob/ instantaneous probability (n_customer, n_maxtime)
         self.OUT_p_i  = OUT_pi # instance probability (n_customer,1)
@@ -66,9 +66,8 @@ class get_loss():
             return self.p_il, self.S_t
 
     def loss_likelihood_mixture(self):   # censoring case == 0
-        #weigths_censored   =  
-        #weigths_uncensored = 
         
+        _EPSILON = self._EPSILON
         Prob, S_t = self.Prob_Surv()
         
         p_i  = self.OUT_p_i
@@ -76,22 +75,55 @@ class get_loss():
         #S_t  = self.S_t
 
         # censored data
-        l_censored = 1 - p_i + tf.math.multiply(p_i, S_t)
+        l_censored = 1 - p_i + tf.clip_by_value(tf.math.multiply(p_i, S_t), _EPSILON, 1-_EPSILON)
         l_censored = l_censored[self.censoring_status == 0]
         l_censored = tf.reduce_sum(
             tf.math.log(l_censored)
             ) 
             
         # uncensored data, true event time z
-        l_uncensored = tf.math.multiply(p_i, Prob)
+        l_uncensored = tf.clip_by_value(tf.math.multiply(p_i, Prob), _EPSILON, 1-_EPSILON)
         l_uncensored = l_uncensored[self.censoring_status == 1]
         l_uncensored = tf.reduce_sum(
             tf.math.log(l_uncensored)
             )
         
         # censored data, max the prob of cumulative prob until event time
+        W_t = tf.clip_by_value(tf.math.multiply(p_i, 1-S_t), _EPSILON, 1-_EPSILON)
         l_uncensored_2 = tf.reduce_sum(
-            tf.math.log(tf.math.multiply(p_i, 1-S_t)[self.censoring_status == 1]
+            tf.math.log(W_t[self.censoring_status == 1]
+            ))
+        
+        if (self.punish_z):
+            self.loss_likelihood_mix = -(l_censored*0.25 + l_uncensored*0.5 + l_uncensored_2*0.25)
+        else:
+            self.loss_likelihood_mix = -(l_censored*0.5 + l_uncensored*0.5)
+        
+        return self.loss_likelihood_mix, (l_censored, l_uncensored, l_uncensored_2)
+
+    def loss_likelihood_non_mixture(self):   # censoring case == 0
+        
+        _EPSILON = self._EPSILON
+        Prob, S_t = self.Prob_Surv()
+
+        # censored data
+        l_censored = tf.clip_by_value(S_t, _EPSILON, 1-_EPSILON)
+        l_censored = l_censored[self.censoring_status == 0]
+        l_censored = tf.reduce_sum(
+            tf.math.log(l_censored)
+            ) 
+            
+        # uncensored data, true event time z
+        l_uncensored = tf.clip_by_value(Prob, _EPSILON, 1-_EPSILON)
+        l_uncensored = l_uncensored[self.censoring_status == 1]
+        l_uncensored = tf.reduce_sum(
+            tf.math.log(l_uncensored)
+            )
+        
+        # censored data, max the prob of cumulative prob until event time
+        W_t = tf.clip_by_value(1-S_t, _EPSILON, 1-_EPSILON)
+        l_uncensored_2 = tf.reduce_sum(
+            tf.math.log(W_t[self.censoring_status == 1]
             ))
         
         if (self.punish_z):
@@ -103,8 +135,8 @@ class get_loss():
     
     def AUC(self):
         acc   = tf.keras.metrics.AUC(int(len(self.censoring_status)/2))
-        acc.update_state(self.censoring_status[self.censoring_status + self.payoff_status == 1], 
-        self.OUT_p_i[self.censoring_status + self.payoff_status == 1]
+        acc.update_state(self.censoring_status, 
+        self.OUT_p_i
         )
 
         return acc.result()
@@ -118,6 +150,10 @@ class get_loss():
             pi_l        : probability matrix of customers dim(customers, max_time)
             mask_ranking: 
         '''
+        mask_ranking = self.mask[1][self.batch_index]
+        sigma1 = self.sigma1
+        label = self.censoring_status
+
         OUT_hi = self.OUT_h_i 
 
         if self.RNN_net:
@@ -131,13 +167,9 @@ class get_loss():
                     temp_h_1 = tf.math.subtract(1, OUT_hi)[:, :i-1]
                     h = tf.reduce_prod(temp_h_1, axis = 1)
                     pil_matrix[:, i] = tf.math.multiply(temp_h, h).numpy()
-            OUT_hi = pil_matrix
+            OUT_hi = tf.nn.softmax(tf.constant(pil_matrix, dtype=tf.float32), axis = 1)
         else: 
             pass
-
-        mask_ranking = self.mask[1]
-        sigma1 = self.sigma1
-        label = self.censoring_status
 
         sigma1 = tf.constant(sigma1, dtype=tf.float32)
         label  = tf.constant(label,  dtype=tf.dtypes.float32)
@@ -158,6 +190,8 @@ class get_loss():
     def ANLP(self):
 
         Prob, S_t = self.Prob_Surv()
+        _EPSILON = self._EPSILON
+        Prob = tf.clip_by_value(Prob, _EPSILON, 1-_EPSILON)
 
         P = tf.reduce_sum(
             tf.math.log(Prob[self.censoring_status == 1]
@@ -180,20 +214,21 @@ class get_loss():
                     temp_h_1 = tf.math.subtract(1, OUT_hi)[:, :i-1]
                     h = tf.reduce_prod(temp_h_1, axis = 1)
                     pil_matrix[:, i] = tf.math.multiply(temp_h, h).numpy()
+            pil_matrix = tf.nn.softmax(pil_matrix, axis = 1)
         else:
             pil_matrix = OUT_hi
 
-        events = self.pat_info[:, 3][self.batch_index]
+        events = self.pat_info[:, 3]
         pred_cindex = []
         preds_t = []
 
-        for i in [12, 24, 36, OUT_hi.shape[-1]]:
-            preds = tf.math.argmax(pil_matrix[:, :i], axis = 1).numpy()
+        for i in [12, 24, 36, 48, OUT_hi.shape[-1]]:
+            preds = tf.math.argmax(pil_matrix[:, :i+1], axis = 1).numpy()
             res = concordance_index(events, preds)
             pred_cindex.append(res)
             preds_t.append(preds)
 
-        return pred_cindex, preds_t, pil_matrix, 
+        return pred_cindex, preds_t, pil_matrix
         
 
 
