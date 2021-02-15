@@ -8,6 +8,19 @@ verify_ssl = true
 [packages]
 jupyter = "*"
 notebook = "*"
+matplotlib = "*"
+pycox = "==0.2.1"
+torchtuples = "==0.2.0"
+install = "*"
+tensorflow = "==2.3.0"
+scikit-learn = "==0.22.1"
+numpy = "==1.16.5"
+pandas = "==1.0.1"
+lifelines = "==0.24.9"
+termcolor = "==1.1.0"
+pydot = "*"
+graphviz = "*"
+progressbar = "*"
 
 [requires]
 python_version = "3.7"

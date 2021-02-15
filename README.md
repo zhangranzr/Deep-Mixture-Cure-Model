@@ -1,7 +1,19 @@
 # Deep-Mixture-Cure-Model(WIP)
 ##  Master Statistics Thesis 
 
-Work in progress
+## Installation & Environment
+
+Environment setting
+
+```bash
+pipenv install 
+```
+
+## Usage
+
+Four different models in total. RNN (mix and non-mix), DDH (mix and non-mix).
+
+Load data(from www.internationalnancialresearch.org). 
 
 Main Reference:
 - [1] C. Lee, W. R. Zame, J. Yoon, M. van der Schaar, "DeepHit: A Deep Learning Approach to Survival Analysis with Competing Risks," AAAI Conference on Artificial Intelligence (AAAI), 2018
